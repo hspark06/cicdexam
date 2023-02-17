@@ -1,0 +1,53 @@
+pipeline {
+    agent any
+    tools {
+        jdk('openjdk17')
+        gradle('gradle7.6')
+    }
+
+	stages {
+        stage('Git Pull') {
+            steps {
+                // Get some code from a GitLab repository
+                  git credentialsId: 'gitssh', url: "${GIT_URL}"
+            }
+        }
+        stage('Gradle Build') {
+			steps {
+			    dir("dsic") {
+                    sh 'gradle clean build -x test'
+                }
+			}
+		}
+		stage('Check Build file existence') {
+            steps {
+                sh '''
+                ls -al
+    		    ls -al /var/lib/jenkins/workspace/jenkins-pipeline/dsic/build/libs/dsic-0.0.1-SNAPSHOT.jar
+    		    '''
+          }
+        }
+        stage('Deploy file') {
+		    steps {
+				sshagent (credentials: ['prd-ssh']) {
+				    sh "scp -o StrictHostKeyChecking=no ${env.WORKSPACE}/dsic/build/libs/${TARGET_FILE} ${TARGET_HOST}:${TARGET_PATH}"
+				    sh """
+    				    ssh -o StrictHostKeyChecking=no ${TARGET_HOST} '
+    				    chmod +x ${TARGET_PATH}/${TARGET_FILE}
+    				    sudo systemctl restart ${TARGET_SERVICE}
+    				    '
+				    """
+				}
+		    }
+		}
+		
+    }
+    environment {
+        BUILD_HOME = "/var/lib/jenkins/workspace/jenkins-pipeline/dsic/build/libs"
+        GIT_URL = "git@192.168.211.128:/home/git/repo/spring.git"
+        TARGET_HOST = "dsic@192.168.211.130"
+        TARGET_PATH = "/home/dsic/app/spring"
+        TARGET_FILE = "dsic-0.0.1-SNAPSHOT.jar"
+        TARGET_SERVICE = "testapp.service"
+    }
+}
