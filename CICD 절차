@@ -1,0 +1,292 @@
+** CICD 구성 방안.
+
+1. 가상머신 생성 (git, jenkins, product)
+
+ 1). VMware 설치
+ 2). ubuntu server download 및 설치
+ 3). sudo apt install net-tools -- ifconfig 사용위해 설치
+
+2. ssh 접속 구성
+
+ 1) client 
+   a. key 생성
+     - ssh-keygen -t rsa -- key 생성
+	 
+ 2) server
+   a. public key 복사
+     - cat id_rsa.pub >> ~./ssh/authorized_keys
+   
+ 3) 접속 테스트
+     - ssh dsic@192.168.211.128
+
+3. git 서버 구성
+
+ 1) 환경구성
+   a. user 생성 (git)
+     - sudo adduser git
+	 - su git
+	 - mkdir ~/.ssh
+	 - chmod 700 ~/.ssh
+	 
+   b. 레파지토리 생성
+     - mkdir repo
+	 - cd reop
+	 - mkdir test.git
+	 - cd test.git
+	 - git init --bare
+	 - cd ..
+	 - chown -R git.git test.git
+
+ 2) client git 연동
+   a. 작업폴더 연동
+     - git init
+	 - git remote add origin git@192.168.211.128:/home/git/repo/test.git
+	 - git add *
+	 - git commit -m "First Commit"
+	 - git push --set-upstream origin master
+	 
+ 3) GIT 참고 command
+	- git pull origin master
+	- git clone git@192.168.211.128:/home/git/repo/spring.git
+	
+
+4. Jenkins 서버 구성
+
+ 1) 환경구성
+ 
+   a. jvm 설치 (openjdk17)
+   
+   b. add jenkins repository
+     - curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+     - echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null 
+   
+   c. install jenkins
+     - sudo apt update
+	 - sudo apt install jenkins -y
+   
+   d. jenkins 상태 확인 및 실행
+     - sudo systemctl status jenkins
+	 - sudo systemctl enable --now jenkins
+   
+   e. jenkins port 방화벽 열기
+     - sudo ufw allow 8080
+	 
+ 2) jenkins 셋팅
+ 
+   a. jenkins 웹페이지 열기
+     - http://ip_address_or_domain:8080 
+   
+   b. 초기 비밀번호
+     - sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+	 
+   c. 초기 플러그인 설치
+   
+ 3) credentials 생성(ssh 사용일 경우)
+   
+   a. Manage Jenkins > Credentials 
+   b. add credentials
+   c. Domain은 global
+      ssh git with private key  
+   d. credentials 생성 후 검증 
+     - Manage Jenkins> Configure Global Security > Git Host Key Verification Configuration 설정
+	
+ 4) JDK 설정
+   a. jdk 설치(openjdk17) 
+   b. Manage Jenkins > Global Tool Configuration > JDK 
+ 
+ 5) GIT 설정
+   a. git 설치
+   b. Manage Jenkins > Global Tool Configuration > GIT
+
+ 6) gradle 설치 (on jenkins server)
+ 
+   a. download gradle (on jenkins server)
+	 - wget -c https://services.gradle.org/distributions/gradle-7.6-milestone-1-bin.zip -P /tmp
+     
+   b. unzip gradle
+	 - sudo unzip -d /opt/gradle /tmp/gradle-7.6-milestone-1-bin.zip
+	 - ls /opt/gradle
+	  
+   c . gradle.sh 파일생성 후 아래 2줄 추가 
+	 - sudo nano /etc/profile.d/gradle.sh
+	   
+	  -- gradle.sh 파일생성 후 아래 2줄 추가
+	  export GRADLE_HOME=/opt/gradle/gradle-7.6-milestone-1
+	  export PATH=${GRADLE_HOME}/bin:${PATH}
+		
+   d. 권한변경 
+	 - sudo chmod +x /etc/profile.d/gradle.sh
+	 - source /etc/profile.d/gradle.sh
+   
+   e. 버전 확인
+	 - gradle --version
+	  
+   f. Manage Jenkins > Global Tool Configuration > GIT
+   
+ 7) Deploy 서버 ssh연동
+ 
+   a. 사이트 참고 
+     - https://royleej9.tistory.com/m/entry/Jenkins-SSH-%EC%82%AC%EC%9A%A9-pipeline-SSH-Agent 
+	 
+	 
+5. PRODUCT 서버 구성
+ 
+ 1) jdk 설치(openjdk17) 
+ 2) 실행 및 배치 쉘 작성
+ 
+*** Linux systemctl 등록 절차
+
+1. *.service 파일 작성 (우분투인경우 /lib/systemd/system경로)
+
+ - sudo vi testapp.service
+ - 아래 내용 입력
+ 
+[Unit]
+Description=Test Spring Boot application
+After=syslog.target network.target remote-fs.target nss-lookup.target
+
+[Service]
+User=dsic
+Type=forking
+ExecStart=/home/dsic/app/spring/start.sh
+ExecReload=/home/dsic/app/spring/restart.sh
+ExecStop=/home/dsic/app/spring/stop.sh
+PrivateTmp=true
+SuccessExitStatus=143
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+2. 파일 복사 
+  - /lib/systemd/system
+
+3. APP 실행
+  - sudo systemctl daemon-reload
+  - sudo systemctl enable testapp.service
+  - sudo systemctl status testapp.service
+  - sudo systemctl start testapp.service
+  - sudo systemctl stop testapp.service
+  - sudo systemctl restart testapp.service
+  
+  - 실행 시 퍼미션 오류 발생 시 
+    sudo chmod +x start.sh
+  
+4. APP 로그 보기 
+   sudo journalctl -u testapp.service -f
+  
+5. 쉘 스크립트 
+
+ a. start.sh 
+    #!/bin/bash
+	export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+	export PATH=$JAVA_HOME/bin:$PATH
+	APP_NAME=dsic-0.0.1-SNAPSHOT
+	##nohup java -jar /home/dsic/app/spring/dsic-0.0.1-SNAPSHOT.jar > testapp.log 2>&1 &
+	nohup java -jar /home/dsic/app/spring/dsic-0.0.1-SNAPSHOT.jar 2>&1 &
+	echo "$APP_NAME is running"
+	
+ b. stop.sh 
+    #!/bin/bash
+	APP_NAME=dsic-0.0.1-SNAPSHOT
+	pid=`ps -ef | grep $APP_NAME | grep -v grep | awk '{print $2}'`
+	
+	if [ -z "${pid}" ]; then
+			echo "$APP_NAME is not running"
+	else
+			echo "kill thread...$pid"
+					kill -9 $pid
+	fi
+ c. restart.sh 
+    #!/bin/bash
+	export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+	export PATH=$JAVA_HOME/bin:$PATH
+	APP_NAME=dsic-0.0.1-SNAPSHOT
+	pid=`ps -ef | grep $APP_NAME | grep -v grep | awk '{print $2}'`
+	
+	if [ -z "${pid}" ]; then
+			echo "$APP_NAME is not running"
+	else
+			echo "kill thread...$pid"
+					kill -9 $pid
+	fi
+	
+	#nohup java -jar /home/dsic/app/spring/dsic-0.0.1-SNAPSHOT.jar > testapp.log 2>&1 &
+	nohup java -jar /home/dsic/app/spring/dsic-0.0.1-SNAPSHOT.jar 2>&1 &
+	echo "$APP_NAME is running"
+
+ 
+ 
+6. 참고사이트 
+  - https://springhow.com/start-stop-scripts-for-spring-boot-applications/
+  - https://www.auroria.io/spring-boot-as-systemd-service/
+  - https://www.springcloud.io/post/2022-02/running-as-system-service/#gsc.tab=0
+
+
+  
+
+ 
+**** 키생성 ****
+
+1. ssh-keygen -t rsa -b 4096 -C dsic@dsic.cokr
+2. 다른이름 변경 
+  - C:\Users\dsic/.ssh/prd_rsa
+  
+3. public key 대상 서버에 Copy
+  - cat pub_key ~/.ssh/authorized_keys
+  
+
+**** private key 여러개일 경우 관리방법
+
+1. config 파일 생성
+  - .ssh/config 
+  - 내용이 존재하면 최하단에서 한줄띄운 후 입력
+  - 내용 형식
+	  Host [사용할 서버 이름]
+		HostName 192.168.211.130
+		User dsic
+		IdentityFile C:\Users\dsic\.ssh\prd_rsa
+		Port 22
+  - 접속 방법 : ssh [사용할 서버 이름]
+
+2. config 파일 예제 
+Host git-ssh
+	HostName 192.168.211.128
+	User dsic
+	IdentityFile C:\Users\dsic\.ssh\id_rsa
+	Port 22
+
+Host jenkins-ssh
+	HostName 192.168.211.129
+	User dsic
+	IdentityFile C:\Users\dsic\.ssh\jenkins_rsa
+	Port 22
+	
+Host prd-ssh
+	HostName 192.168.211.130
+	User dsic
+	IdentityFile C:\Users\dsic\.ssh\prd_rsa
+	Port 22
+
+
+**** jenkins sudo *****
+
+1. CentOS
+CentOS의 경우에는 /etc/sudoers 파일에 모든 내용이 다 적혀있는 편이다. 그래서 편집만 하면 된다
+
+sudo nano /etc/sudoers 명령어로 sudoers 파일에 대한 수정을 시작한다
+뭐 내용이 주르륵 나오는데 우선 Defaults requiretty를 찾아서 주석처리(#) 한다.
+파일의 마지막 부분에 추가시켜준다. jenkins ALL=(ALL) NOPASSWD: ALL
+
+2. Ubuntu
+Ubuntu의 경우에는 CentOS에 비하면 /etc/sudoers 파일이 굉장히 휑하다... (이래도 되나 싶을 정도로...) 
+설정들을 /etc/sudoers.d/라는 디렉토리에 분산시켜놓은 다음에 include 해놓은 구성인데 
+CentOS처럼 /etc/sudoers에 그냥 적어도 되지만 구색을 맞춰주는 차원에서 /etc/sudoers.d에 새 설정을 추가하도록 한다.
+
+ - sudo su로 root로 진입한다
+ - cd /etc/sudoers.d로 이동
+ - sudo nano jenkins로 새 설정 파일을 만든다
+ - jenkins ALL=(ALL) NOPASSWD: ALL를 입력해주고 편집에서 나온다
+ - chmod 0440 jenkins로 파일의 권한을 바꾼다
+ - exit로 root에서 나온다
