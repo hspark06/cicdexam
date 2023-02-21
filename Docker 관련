@@ -1,0 +1,238 @@
+
+**** Docker 관련 ****
+
+**** install on ubuntu [https://docs.docker.com/engine/install/ubuntu/] ****
+1. Uninstall old versions
+- sudo apt-get remove docker docker-engine docker.io containerd runc
+
+2. Install 
+- sudo apt-get update
+- sudo apt-get install ca-certificates curl gnupg lsb-release
+- sudo mkdir -m 0755 -p /etc/apt/keyrings
+- curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+- echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+- sudo apt-get update
+- sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+* Verify that the Docker Engine installation is successful by running the hello-world image
+- sudo docker run hello-world
+
+
+
+**** Dockerfile example ****
+FROM node:10
+
+# Create app directory
+WORKDIR /usr/src/app
+
+# Install app dependencies
+# A wildcard is used to ensure both package.json AND package-lock.json are copied
+# where available (npm@5+)
+COPY package*.json ./
+
+RUN npm install --only=production
+# If you are building your code for production
+# RUN npm install --only=production
+
+# Bundle app source
+COPY . .
+
+EXPOSE 5000
+CMD [ "npm", "start" ]
+
+
+**** docker command ****
+1. build
+- docker build -t getting-started .
+
+2. run
+- docker run -dp 3000:3000 getting-started
+: You use the -d flag to run the new container in “detached” mode (in the background). 
+  You also use the -p flag to create a mapping between the host’s port 3000 to the container’s port 3000. 
+
+3. stop 
+- docker ps
+- docker stop <the-container-id>
+
+4. remove 
+- docker rm <the-container-id>  
+
+5. stop & remove
+- docker ps
+- docker rm -f <the-container-id>
+
+6. image 조회
+- docker image ls
+
+7. 개별 docker command line 접근
+- docker exec <container-id> ls -al
+
+8. log 조회
+- docker ps -a  // <container ID> 조회
+- docker logs <container ID>
+- docker logs --tail 100 <container ID>
+
+
+
+**** docker volume 생성 ****
+1. volume 생성 및 mount
+- docker volume create todo-db
+- docker run -dp 3000:3000 --mount type=volume,src=todo-db,target=/etc/todos getting-started
+: Start the todo app container, but add the --mount option to specify a volume mount.
+  We will give the volume a name, and mount it to /etc/todos in the container, which will capture all files created at the path.
+
+2. volume 상세정보 조회
+- docker volume inspect todo-db
+: The Mountpoint is the actual location on the disk where the data is stored.
+
+
+
+**** docker network example ****
+
+1. Create the network
+- docker network create todo-app
+
+2. Start a MySQL container and attach it to the network. 
+- docker run -d --network todo-app --network-alias mysql -v todo-mysql-data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=todos mysql:8.0
+
+: You’ll notice we’re using a volume named todo-mysql-data here 
+  and mounting it at /var/lib/mysql, which is where MySQL stores its data. 
+  However, we never ran a docker volume create command. 
+  Docker recognizes we want to use a named volume and creates one automatically for us.
+  
+  To confirm we have the database up and running, connect to the database and verify it connects.
+  docker exec -it <mysql-container-id> mysql -u root -p
+  
+3. nicolaka/netshoot container 추가(docker network에서 container 식별 도구모음)
+- docker run -it --network todo-app nicolaka/netshoot
+
+: Inside the container, we’re going to use the dig command, which is a useful DNS tool. 
+  We’re going to look up the IP address for the hostname mysql
+ 
+- dig mysql
+
+And you’ll get an output like this...
+
+; <<>> DiG 9.18.8 <<>> mysql
+ ;; global options: +cmd
+ ;; Got answer:
+ ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 32162
+ ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+
+ ;; QUESTION SECTION:
+ ;mysql.				IN	A
+
+ ;; ANSWER SECTION:
+ mysql.			600	IN	A	172.23.0.2
+
+ ;; Query time: 0 msec
+ ;; SERVER: 127.0.0.11#53(127.0.0.11)
+ ;; WHEN: Tue Oct 01 23:47:24 UTC 2019
+ ;; MSG SIZE  rcvd: 44
+ 
+ In the “ANSWER SECTION”, you will see an A record for mysql that resolves to 172.23.0.2
+ While mysql isn’t normally a valid hostname, Docker was able to resolve it to the IP address of the container that had that network alias 
+ 
+4. app network에 연결하기
+- docker run -dp 3000:3000 -w /app -v "$(pwd):/app" --network todo-app -e MYSQL_HOST=mysql -e MYSQL_USER=root -e MYSQL_PASSWORD=secret -e MYSQL_DB=todos node:18-alpine sh -c "yarn install && yarn run dev"
+
+5 db 접속여부 log 확인
+- docker logs -f <container-id>
+
+6. mysql 데이터 조회 
+- docker exec -it <mysql-container-id> mysql -p todos
+: select * from todo_items;
+
+
+
+**** docker compose ****
+1. 목표 대상(APP SERVICE)
+
+- docker run -dp 3000:3000 \
+  -w /app -v "$(pwd):/app" \
+  --network todo-app \
+  -e MYSQL_HOST=mysql \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=secret \
+  -e MYSQL_DB=todos \
+  node:18-alpine \
+  sh -c "yarn install && yarn run dev"
+  
+2. docker-compose.yml 작성 (APP SERVICE)
+
+services:
+  app:
+    image: node:18-alpine
+    command: sh -c "yarn install && yarn run dev"
+    ports:
+      - 3000:3000
+    working_dir: /app
+    volumes:
+      - ./:/app
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: secret
+      MYSQL_DB: todos
+
+3. 목표 대상(MySQL SERVICE)
+- docker run -d \
+  --network todo-app --network-alias mysql \
+  -v todo-mysql-data:/var/lib/mysql \
+  -e MYSQL_ROOT_PASSWORD=secret \
+  -e MYSQL_DATABASE=todos \
+  mysql:8.0
+
+4. docker-compose.yml 작성 (MySQL SERVICE)
+
+services:
+  app:
+    # The app service definition
+  mysql:
+    image: mysql:8.0
+    volumes:
+      - todo-mysql-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: todos
+
+volumes:
+  todo-mysql-data:
+  
+  
+5. 최종 docker-compose.yml 파일
+services:
+  app:
+    image: node:18-alpine
+    command: sh -c "yarn install && yarn run dev"
+    ports:
+      - 3000:3000
+    working_dir: /app
+    volumes:
+      - ./:/app
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: secret
+      MYSQL_DB: todos
+
+  mysql:
+    image: mysql:8.0
+    volumes:
+      - todo-mysql-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: todos
+
+volumes:
+  todo-mysql-data:
+  
+  
+5. run the application stack
+- docker compose up -d
+
+6. log 조회
+- docker compose logs -f
+
+7. down 
+- sudo docker compose down
